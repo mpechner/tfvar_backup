@@ -1,5 +1,7 @@
 # tfvar_backup
 
+[![Latest Release](https://img.shields.io/github/v/release/mpechner/tfvar_backup)](https://github.com/mpechner/tfvar_backup/releases/latest)
+
 Terraform `tfvars` files hold environment-specific configuration — hostnames, CIDRs, instance sizes, feature flags. They are not secrets per se, but they are also not committed to the repo. Losing them means manually reconstructing the state of every environment from scratch.
 
 This toolset provides a simple, repeatable way to back them up to S3 and restore them when needed.
