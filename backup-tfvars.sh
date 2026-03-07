@@ -157,6 +157,16 @@ apply_one() {
   aws s3 cp "s3://${TFVARS_BUCKET}/${key}" "$local_path" --region "$REGION"
 }
 
+# ── Validate bucket exists ────────────────────────────────────────────────────
+if ! aws s3api head-bucket --bucket "$TFVARS_BUCKET" --region "$REGION" 2>/dev/null; then
+  echo "ERROR: Bucket s3://${TFVARS_BUCKET} not found or not accessible."
+  echo ""
+  echo "  • Create it first: ./create-buckets.sh ${TFVARS_BUCKET}"
+  echo "  • Check the bucket name and region are correct (--region ${REGION})"
+  echo "  • Verify your AWS credentials have s3:HeadBucket permission"
+  exit 1
+fi
+
 # ── List mode ─────────────────────────────────────────────────────────────────
 if [ "$MODE" = "--list" ]; then
   echo "Listing tfvars in s3://${TFVARS_BUCKET}/${REPO_NAME}/"

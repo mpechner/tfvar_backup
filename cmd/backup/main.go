@@ -166,6 +166,9 @@ func s3KeyFor(repoRoot, repoName, file string) string {
 
 // push uploads all terraform.tfvars files under repoRoot to S3.
 func push(ctx context.Context, client *s3.Client, bucket, repoRoot, repoName, region string, dryRun bool) error {
+	if err := checkBucketExists(ctx, client, bucket); err != nil {
+		return err
+	}
 	files, err := findTFVars(repoRoot)
 	if err != nil {
 		return err
@@ -204,6 +207,9 @@ func push(ctx context.Context, client *s3.Client, bucket, repoRoot, repoName, re
 // pull restores tfvars from S3. When filePath is non-empty only that one
 // file is restored; otherwise all files under the repo prefix are restored.
 func pull(ctx context.Context, client *s3.Client, bucket, repoRoot, repoName, region, filePath string, showDiff bool) error {
+	if err := checkBucketExists(ctx, client, bucket); err != nil {
+		return err
+	}
 	if filePath != "" {
 		key := repoName + "/" + filePath
 		fmt.Printf("Restoring s3://%s/%s → %s/%s\n\n", bucket, key, repoRoot, filePath)
@@ -240,6 +246,9 @@ func pull(ctx context.Context, client *s3.Client, bucket, repoRoot, repoName, re
 
 // list prints all terraform.tfvars keys stored under the repo prefix.
 func list(ctx context.Context, client *s3.Client, bucket, repoName string) error {
+	if err := checkBucketExists(ctx, client, bucket); err != nil {
+		return err
+	}
 	prefix := repoName + "/"
 	fmt.Printf("Listing tfvars in s3://%s/%s\n", bucket, prefix)
 
@@ -249,6 +258,21 @@ func list(ctx context.Context, client *s3.Client, bucket, repoName string) error
 	}
 	for _, k := range keys {
 		fmt.Println(k)
+	}
+	return nil
+}
+
+// checkBucketExists returns a clear error if the bucket does not exist or
+// is not accessible, rather than letting a cryptic S3 API error surface later.
+func checkBucketExists(ctx context.Context, client *s3.Client, bucket string) error {
+	_, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		return fmt.Errorf(
+			"bucket s3://%s not found or not accessible\n\n"+
+				"  • Create it first: tfvar-create-buckets %s\n"+
+				"  • Check the bucket name and region are correct\n"+
+				"  • Verify your AWS credentials have s3:HeadBucket permission",
+			bucket, bucket)
 	}
 	return nil
 }
