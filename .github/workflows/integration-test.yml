@@ -165,7 +165,6 @@ jobs:
       - name: Dry-run push does not create new S3 objects
         run: |
           # Add a new file that should NOT appear in S3 after a dry-run
-          echo 'env = "staging"' > "${TEST_REPO}/deployments/staging/infra/terraform.tfvars"
           mkdir -p "${TEST_REPO}/deployments/staging/infra"
           echo 'env = "staging"' > "${TEST_REPO}/deployments/staging/infra/terraform.tfvars"
 
@@ -222,8 +221,10 @@ jobs:
               --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
               --output json)
 
-            objects=$(echo "${versions}${markers}" \
-              | jq -s '[(.[0] // []), (.[1] // [])] | add | map(select(. != null))')
+            objects=$(jq -n \
+              --argjson v "${versions:-null}" \
+              --argjson m "${markers:-null}" \
+              '[($v // [])[], ($m // [])[]] | map(select(. != null))')
 
             if [[ "$objects" != "[]" && -n "$objects" ]]; then
               echo "$objects" \
