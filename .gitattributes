@@ -1,0 +1,15 @@
+# Always use LF for shell scripts — prevents CRLF breakage on WSL
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Go source and config files — LF everywhere
+*.go    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.tf    text eol=lf
+
+# Binaries — no line ending conversion
+*.exe   binary

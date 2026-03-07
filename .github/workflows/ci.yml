@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:  # allow manual trigger from the Actions tab
+
+jobs:
+  build:
+    name: Build & vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build (host platform)
+        run: make build
+
+      - name: Cross-compile all release targets
+        run: |
+          for GOOS in linux darwin windows; do
+            for GOARCH in amd64 arm64; do
+              EXT=""
+              [ "$GOOS" = "windows" ] && EXT=".exe"
+              echo "Building ${GOOS}/${GOARCH}..."
+              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+                go build -ldflags "-s -w" \
+                  -o /dev/null ./cmd/backup
+              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+                go build -ldflags "-s -w" \
+                  -o /dev/null ./cmd/create-buckets
+            done
+          done
+
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check bash scripts
+        run: bash -n backup-tfvars.sh && bash -n create-buckets.sh && bash -n scripts/bootstrap.sh
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          severity: warning

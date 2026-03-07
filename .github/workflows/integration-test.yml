@@ -1,0 +1,254 @@
+name: Integration Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:  # allow manual trigger from the Actions tab
+  # Also run when triggered by the release workflow
+  workflow_call:
+    outputs:
+      passed:
+        description: "Whether the integration test passed"
+        value: ${{ jobs.integration.outputs.passed }}
+
+jobs:
+  integration:
+    name: S3 push / pull round-trip
+    runs-on: ubuntu-latest
+
+    # Skip if AWS secrets are not configured (e.g. external forks / dependabot PRs).
+    # The 'build' job in ci.yml still runs so compile errors are always caught.
+    if: ${{ vars.INTEGRATION_TESTS_ENABLED == 'true' }}
+
+    outputs:
+      passed: ${{ steps.result.outputs.passed }}
+
+    permissions:
+      id-token: write   # needed for OIDC role assumption
+      contents: read
+
+    env:
+      AWS_REGION:     ${{ vars.AWS_REGION || 'us-east-1' }}
+      # run_id + run_attempt makes the name unique even on re-runs of the same workflow
+      TEST_BUCKET:    tfvar-inttest-${{ github.run_id }}-${{ github.run_attempt }}
+      LOGGING_BUCKET: tfvar-inttest-${{ github.run_id }}-${{ github.run_attempt }}-logs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ── AWS credentials ───────────────────────────────────────────────────
+      # Option A (recommended): OIDC — no long-lived keys stored as secrets.
+      # Requires an IAM role with a trust policy that allows this repo.
+      # Set the Actions variable OIDC_ROLE_ARN to use this path.
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ vars.OIDC_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:  ${{ vars.OIDC_ROLE_ARN }}
+          aws-region:      ${{ env.AWS_REGION }}
+
+      # Option B: static IAM key stored as repository secrets.
+      # Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets to use this path.
+      - name: Configure AWS credentials (static keys)
+        if: ${{ vars.OIDC_ROLE_ARN == '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # ── Build binaries ────────────────────────────────────────────────────
+      - name: Build binaries
+        run: make build
+
+      # ── Create a local git repo with test tfvars ───────────────────────────
+      # We init a real git repo so the binaries can detect the repo name
+      # from the remote URL, matching real-world behaviour.
+      - name: Set up test repo
+        run: |
+          TEST_REPO=$(mktemp -d)
+          echo "TEST_REPO=${TEST_REPO}" >> "$GITHUB_ENV"
+
+          cd "$TEST_REPO"
+          git init
+          git remote add origin https://github.com/mpechner/tfvar_backup-inttest.git
+
+          # Create a realistic tfvars tree
+          mkdir -p deployments/dev/infra deployments/prod/infra
+          echo 'region = "us-east-1"'        > deployments/dev/infra/terraform.tfvars
+          echo 'instance_type = "t3.micro"' >> deployments/dev/infra/terraform.tfvars
+          echo 'region = "us-east-1"'        > deployments/prod/infra/terraform.tfvars
+          echo 'instance_type = "m5.large"' >> deployments/prod/infra/terraform.tfvars
+
+          echo "Created test repo at ${TEST_REPO}"
+          find "$TEST_REPO" -name "terraform.tfvars"
+
+      # ── Create S3 buckets ─────────────────────────────────────────────────
+      - name: Create S3 buckets
+        run: |
+          ./bin/tfvar-create-buckets "$TEST_BUCKET" \
+            --region "$AWS_REGION" \
+            --logging "$LOGGING_BUCKET"
+
+      # ── Push scenario ─────────────────────────────────────────────────────
+      - name: Push tfvars to S3
+        run: |
+          ./bin/tfvar-backup push "$TEST_BUCKET" "$TEST_REPO" \
+            --region "$AWS_REGION"
+
+      - name: List — verify files are in S3
+        run: |
+          ./bin/tfvar-backup list "$TEST_BUCKET" "$TEST_REPO" \
+            --region "$AWS_REGION" | tee /tmp/list-output.txt
+
+          # Assert both files appear
+          grep -q "deployments/dev/infra/terraform.tfvars"  /tmp/list-output.txt
+          grep -q "deployments/prod/infra/terraform.tfvars" /tmp/list-output.txt
+          echo "✓ Both files found in S3"
+
+      # ── Pull scenario (all files) ─────────────────────────────────────────
+      - name: Pull all tfvars from S3 into a fresh directory
+        run: |
+          RESTORE_DIR=$(mktemp -d)
+          echo "RESTORE_DIR=${RESTORE_DIR}" >> "$GITHUB_ENV"
+
+          # Mirror the git remote so the binary resolves the same repo name
+          cd "$RESTORE_DIR"
+          git init
+          git remote add origin https://github.com/mpechner/tfvar_backup-inttest.git
+
+          ./bin/tfvar-backup pull "$TEST_BUCKET" \
+            --region "$AWS_REGION"
+
+          # Assert restored files exist and have expected content
+          DEV_FILE="${RESTORE_DIR}/deployments/dev/infra/terraform.tfvars"
+          PROD_FILE="${RESTORE_DIR}/deployments/prod/infra/terraform.tfvars"
+
+          [ -f "$DEV_FILE"  ] || { echo "FAIL: dev tfvars missing";  exit 1; }
+          [ -f "$PROD_FILE" ] || { echo "FAIL: prod tfvars missing"; exit 1; }
+
+          grep -q 't3.micro'  "$DEV_FILE"  || { echo "FAIL: dev content mismatch";  exit 1; }
+          grep -q 'm5.large'  "$PROD_FILE" || { echo "FAIL: prod content mismatch"; exit 1; }
+          echo "✓ Pull all: content verified"
+
+      # ── Pull scenario (single file) ───────────────────────────────────────
+      - name: Pull a single file from S3
+        run: |
+          SINGLE_DIR=$(mktemp -d)
+
+          cd "$SINGLE_DIR"
+          git init
+          git remote add origin https://github.com/mpechner/tfvar_backup-inttest.git
+
+          ./bin/tfvar-backup pull-file "$TEST_BUCKET" \
+            deployments/dev/infra/terraform.tfvars \
+            --region "$AWS_REGION"
+
+          FILE="${SINGLE_DIR}/deployments/dev/infra/terraform.tfvars"
+          [ -f "$FILE" ] || { echo "FAIL: single pull file missing"; exit 1; }
+          grep -q 't3.micro' "$FILE" || { echo "FAIL: single pull content mismatch"; exit 1; }
+
+          # Assert the prod file was NOT restored
+          [ ! -f "${SINGLE_DIR}/deployments/prod/infra/terraform.tfvars" ] \
+            || { echo "FAIL: prod file should not have been restored"; exit 1; }
+          echo "✓ Pull single file: content verified"
+
+      # ── Dry-run scenario ──────────────────────────────────────────────────
+      - name: Dry-run push does not create new S3 objects
+        run: |
+          # Add a new file that should NOT appear in S3 after a dry-run
+          echo 'env = "staging"' > "${TEST_REPO}/deployments/staging/infra/terraform.tfvars"
+          mkdir -p "${TEST_REPO}/deployments/staging/infra"
+          echo 'env = "staging"' > "${TEST_REPO}/deployments/staging/infra/terraform.tfvars"
+
+          ./bin/tfvar-backup push "$TEST_BUCKET" "$TEST_REPO" \
+            --region "$AWS_REGION" \
+            --dry-run | tee /tmp/dryrun-output.txt
+
+          # The staging file should appear in dry-run output
+          grep -q "staging" /tmp/dryrun-output.txt \
+            || { echo "FAIL: staging file not mentioned in dry-run output"; exit 1; }
+
+          # But should NOT be in S3
+          ./bin/tfvar-backup list "$TEST_BUCKET" "$TEST_REPO" \
+            --region "$AWS_REGION" | tee /tmp/list-after-dryrun.txt
+
+          if grep -q "staging" /tmp/list-after-dryrun.txt; then
+            echo "FAIL: staging file was uploaded during dry-run"
+            exit 1
+          fi
+          echo "✓ Dry-run did not upload staging file"
+
+      # ── Mark result ───────────────────────────────────────────────────────
+      - name: Mark test passed
+        id: result
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+      # ── Cleanup — always runs even if tests fail ───────────────────────────
+      # Failure here fails the job — leftover buckets = leaked AWS resources.
+      - name: Clean up S3 buckets
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "Cleaning up s3://${TEST_BUCKET} and s3://${LOGGING_BUCKET}..."
+
+          delete_bucket() {
+            local bucket="$1"
+
+            # Head-bucket first — if the bucket doesn't exist (e.g. create-buckets
+            # step never ran), skip silently.
+            if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+              echo "  s3://${bucket} does not exist, skipping."
+              return 0
+            fi
+
+            # Remove all object versions and delete markers (required before
+            # deleting a versioned bucket).
+            echo "  Deleting all object versions in s3://${bucket}..."
+            aws s3api list-object-versions \
+              --bucket "$bucket" \
+              --output json \
+              --query '{Objects: [Versions,DeleteMarkers][][].{Key:Key,VersionId:VersionId}}' \
+            | python3 - <<'PYEOF'
+          import json, sys, boto3, os
+          data = json.load(sys.stdin)
+          objects = [o for o in (data.get('Objects') or []) if o]
+          if objects:
+              s3 = boto3.client('s3', region_name=os.environ['AWS_REGION'])
+              resp = s3.delete_objects(
+                  Bucket=os.environ.get('_BUCKET'),
+                  Delete={'Objects': objects, 'Quiet': False},
+              )
+              errors = resp.get('Errors', [])
+              if errors:
+                  print(f"Delete errors: {errors}", file=sys.stderr)
+                  sys.exit(1)
+              print(f"  Deleted {len(objects)} object version(s).")
+          PYEOF
+
+            # Delete the now-empty bucket
+            echo "  Removing s3://${bucket}..."
+            aws s3api delete-bucket --bucket "$bucket" --region "$AWS_REGION"
+
+            # Verify it is gone — fail loudly if it still exists
+            if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+              echo "ERROR: s3://${bucket} still exists after delete — manual cleanup required."
+              exit 1
+            fi
+            echo "  ✓ s3://${bucket} deleted."
+          }
+
+          export _BUCKET="$TEST_BUCKET"
+          delete_bucket "$TEST_BUCKET"
+
+          export _BUCKET="$LOGGING_BUCKET"
+          delete_bucket "$LOGGING_BUCKET"
+
+          echo "✓ Cleanup complete."

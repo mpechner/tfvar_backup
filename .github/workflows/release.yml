@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:  # allow manual trigger from the Actions tab
+    inputs:
+      tag:
+        description: "Tag/version to build (e.g. v1.0.0) — defaults to current commit"
+        required: false
+        default: "dev"
+
+permissions:
+  contents: write   # needed to create GitHub Releases and upload assets
+  id-token: write   # needed for OIDC in the integration test
+
+jobs:
+  # ── Step 1: Integration tests ─────────────────────────────────────────────
+  # Must pass before any build artifacts are produced.
+  integration-test:
+    name: Integration test (required)
+    uses: ./.github/workflows/integration-test.yml
+
+  # ── Step 2: Canary build — linux/amd64 only ───────────────────────────────
+  # Validates the build pipeline succeeds on the primary platform before
+  # spending runners on all five targets.
+  build-canary:
+    name: Canary build (linux/amd64)
+    needs: integration-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set version info
+        id: vars
+        run: |
+          # On a tag push GITHUB_REF_NAME is the tag (e.g. v1.0.0).
+          # On a manual run use the input, falling back to "dev".
+          VERSION="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.tag || 'dev' }}"
+          fi
+          echo "version=${VERSION}"                   >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)"            >> "$GITHUB_OUTPUT"
+
+      - name: Build linux/amd64
+        env:
+          GOOS:        linux
+          GOARCH:      amd64
+          CGO_ENABLED: "0"
+        run: |
+          PKG=github.com/mpechner/tfvar_backup/internal/version
+          LDFLAGS="-s -w \
+            -X ${PKG}.Version=${{ steps.vars.outputs.version }} \
+            -X ${PKG}.Commit=${{ steps.vars.outputs.commit }} \
+            -X ${PKG}.Date=${{ steps.vars.outputs.date }}"
+          mkdir -p dist
+          go build -ldflags "$LDFLAGS" -o dist/tfvar-backup-linux-amd64         ./cmd/backup
+          go build -ldflags "$LDFLAGS" -o dist/tfvar-create-buckets-linux-amd64 ./cmd/create-buckets
+
+      - name: Smoke-test — version flag
+        run: |
+          ./dist/tfvar-backup-linux-amd64 --version
+          ./dist/tfvar-create-buckets-linux-amd64 --version
+
+      - name: Generate canary checksum
+        run: cd dist && sha256sum * > checksums-linux-amd64.txt
+
+      - name: Upload canary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-linux-amd64
+          path: dist/
+
+  # ── Step 3: Remaining platforms — all in parallel ─────────────────────────
+  # Only starts after the canary succeeds.
+  build-matrix:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: build-canary
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set version info
+        id: vars
+        run: |
+          # On a tag push GITHUB_REF_NAME is the tag (e.g. v1.0.0).
+          # On a manual run use the input, falling back to "dev".
+          VERSION="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.tag || 'dev' }}"
+          fi
+          echo "version=${VERSION}"                   >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)"            >> "$GITHUB_OUTPUT"
+
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          GOOS:        ${{ matrix.goos }}
+          GOARCH:      ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          PKG=github.com/mpechner/tfvar_backup/internal/version
+          LDFLAGS="-s -w \
+            -X ${PKG}.Version=${{ steps.vars.outputs.version }} \
+            -X ${PKG}.Commit=${{ steps.vars.outputs.commit }} \
+            -X ${PKG}.Date=${{ steps.vars.outputs.date }}"
+
+          EXT=""
+          [ "${{ matrix.goos }}" = "windows" ] && EXT=".exe"
+          SUFFIX="${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p dist
+
+          go build -ldflags "$LDFLAGS" -o "dist/tfvar-backup-${SUFFIX}${EXT}"         ./cmd/backup
+          go build -ldflags "$LDFLAGS" -o "dist/tfvar-create-buckets-${SUFFIX}${EXT}" ./cmd/create-buckets
+
+      - name: Generate checksum
+        run: cd dist && sha256sum * > checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+
+  # ── Step 4: Publish — only after all builds succeed ───────────────────────
+  publish:
+    name: Publish GitHub Release
+    needs: [build-canary, build-matrix]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Stage setup script
+        run: cp scripts/setup-iam.sh dist/setup-iam.sh
+
+      - name: Merge checksum files
+        run: |
+          cd dist
+          cat checksums-*.txt | sort > SHA256SUMS.txt
+          rm checksums-*.txt
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
