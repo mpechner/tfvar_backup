@@ -117,13 +117,14 @@ jobs:
         run: |
           RESTORE_DIR=$(mktemp -d)
           echo "RESTORE_DIR=${RESTORE_DIR}" >> "$GITHUB_ENV"
+          BINDIR="$GITHUB_WORKSPACE/bin"
 
           # Mirror the git remote so the binary resolves the same repo name
           cd "$RESTORE_DIR"
           git init
           git remote add origin https://github.com/mpechner/tfvar_backup-inttest.git
 
-          ./bin/tfvar-backup pull "$TEST_BUCKET" \
+          "$BINDIR/tfvar-backup" pull "$TEST_BUCKET" \
             --region "$AWS_REGION"
 
           # Assert restored files exist and have expected content
@@ -141,12 +142,13 @@ jobs:
       - name: Pull a single file from S3
         run: |
           SINGLE_DIR=$(mktemp -d)
+          BINDIR="$GITHUB_WORKSPACE/bin"
 
           cd "$SINGLE_DIR"
           git init
           git remote add origin https://github.com/mpechner/tfvar_backup-inttest.git
 
-          ./bin/tfvar-backup pull-file "$TEST_BUCKET" \
+          "$BINDIR/tfvar-backup" pull-file "$TEST_BUCKET" \
             deployments/dev/infra/terraform.tfvars \
             --region "$AWS_REGION"
 
@@ -221,7 +223,7 @@ jobs:
               --output json)
 
             objects=$(echo "${versions}${markers}" \
-              | jq -s '[.[][] | select(. != null)]')
+              | jq -s '[(.[0] // []), (.[1] // [])] | add | map(select(. != null))')
 
             if [[ "$objects" != "[]" && -n "$objects" ]]; then
               echo "$objects" \
