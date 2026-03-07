@@ -112,9 +112,12 @@ if [ -n "$ACCOUNT_ID" ]; then
     --role-session-name "backup-tfvars" \
     --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
     --output text)
-  export AWS_ACCESS_KEY_ID=$(echo "$TEMP_CREDS"     | awk '{print $1}')
-  export AWS_SECRET_ACCESS_KEY=$(echo "$TEMP_CREDS" | awk '{print $2}')
-  export AWS_SESSION_TOKEN=$(echo "$TEMP_CREDS"     | awk '{print $3}')
+  export AWS_ACCESS_KEY_ID
+  export AWS_SECRET_ACCESS_KEY
+  export AWS_SESSION_TOKEN
+  AWS_ACCESS_KEY_ID=$(echo "$TEMP_CREDS"     | awk '{print $1}')
+  AWS_SECRET_ACCESS_KEY=$(echo "$TEMP_CREDS" | awk '{print $2}')
+  AWS_SESSION_TOKEN=$(echo "$TEMP_CREDS"     | awk '{print $3}')
 fi
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

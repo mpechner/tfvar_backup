@@ -63,9 +63,12 @@ if [ -n "$ACCOUNT_ID" ]; then
     --role-session-name "create-buckets" \
     --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
     --output text)
-  export AWS_ACCESS_KEY_ID=$(echo "$TEMP_CREDS"     | awk '{print $1}')
-  export AWS_SECRET_ACCESS_KEY=$(echo "$TEMP_CREDS" | awk '{print $2}')
-  export AWS_SESSION_TOKEN=$(echo "$TEMP_CREDS"     | awk '{print $3}')
+  export AWS_ACCESS_KEY_ID
+  export AWS_SECRET_ACCESS_KEY
+  export AWS_SESSION_TOKEN
+  AWS_ACCESS_KEY_ID=$(echo "$TEMP_CREDS"     | awk '{print $1}')
+  AWS_SECRET_ACCESS_KEY=$(echo "$TEMP_CREDS" | awk '{print $2}')
+  AWS_SESSION_TOKEN=$(echo "$TEMP_CREDS"     | awk '{print $3}')
 fi
 
 # Auto-detect git repo name from the remote URL, falling back to the directory name.
@@ -94,11 +97,11 @@ create_bucket_if_missing() {
   local description="$2"
 
   if bucket_exists "$bucket"; then
-    echo "  [skip] Bucket already exists: s3://${bucket}"
+    echo "  [skip] Bucket already exists: s3://${bucket} (${description})"
     return 0
   fi
 
-  echo "  [create] Creating bucket: s3://${bucket} (${REGION})"
+  echo "  [create] Creating bucket: s3://${bucket} — ${description} (${REGION})"
   if [ "$REGION" = "us-east-1" ]; then
     aws s3api create-bucket \
       --bucket "$bucket" \
