@@ -201,42 +201,44 @@ jobs:
           delete_bucket() {
             local bucket="$1"
 
-            # Head-bucket first — if the bucket doesn't exist (e.g. create-buckets
-            # step never ran), skip silently.
+            # If the bucket doesn't exist (e.g. create-buckets step never ran), skip.
             if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
               echo "  s3://${bucket} does not exist, skipping."
               return 0
             fi
 
             # Remove all object versions and delete markers (required before
-            # deleting a versioned bucket).
-            echo "  Deleting all object versions in s3://${bucket}..."
-            aws s3api list-object-versions \
+            # deleting a versioned bucket). --query returns null when empty,
+            # so guard against that before calling delete-objects.
+            echo "  Purging all object versions in s3://${bucket}..."
+            versions=$(aws s3api list-object-versions \
               --bucket "$bucket" \
-              --output json \
-              --query '{Objects: [Versions,DeleteMarkers][][].{Key:Key,VersionId:VersionId}}' \
-            | python3 - <<'PYEOF'
-          import json, sys, boto3, os
-          data = json.load(sys.stdin)
-          objects = [o for o in (data.get('Objects') or []) if o]
-          if objects:
-              s3 = boto3.client('s3', region_name=os.environ['AWS_REGION'])
-              resp = s3.delete_objects(
-                  Bucket=os.environ.get('_BUCKET'),
-                  Delete={'Objects': objects, 'Quiet': False},
-              )
-              errors = resp.get('Errors', [])
-              if errors:
-                  print(f"Delete errors: {errors}", file=sys.stderr)
-                  sys.exit(1)
-              print(f"  Deleted {len(objects)} object version(s).")
-          PYEOF
+              --query 'Versions[].{Key:Key,VersionId:VersionId}' \
+              --output json)
+            markers=$(aws s3api list-object-versions \
+              --bucket "$bucket" \
+              --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
+              --output json)
+
+            objects=$(echo "${versions}${markers}" \
+              | jq -s '[.[][] | select(. != null)]')
+
+            if [[ "$objects" != "[]" && -n "$objects" ]]; then
+              echo "$objects" \
+                | jq '{Objects: ., Quiet: true}' \
+                | aws s3api delete-objects \
+                    --bucket "$bucket" \
+                    --delete file:///dev/stdin
+              echo "  Purged object versions."
+            else
+              echo "  No object versions to purge."
+            fi
 
             # Delete the now-empty bucket
             echo "  Removing s3://${bucket}..."
             aws s3api delete-bucket --bucket "$bucket" --region "$AWS_REGION"
 
-            # Verify it is gone — fail loudly if it still exists
+            # Verify it is gone
             if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
               echo "ERROR: s3://${bucket} still exists after delete — manual cleanup required."
               exit 1
@@ -244,10 +246,7 @@ jobs:
             echo "  ✓ s3://${bucket} deleted."
           }
 
-          export _BUCKET="$TEST_BUCKET"
           delete_bucket "$TEST_BUCKET"
-
-          export _BUCKET="$LOGGING_BUCKET"
           delete_bucket "$LOGGING_BUCKET"
 
           echo "✓ Cleanup complete."
