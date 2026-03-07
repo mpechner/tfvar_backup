@@ -2,8 +2,9 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/mpechner/tfvar_backup)](https://github.com/mpechner/tfvar_backup/releases/latest)
 
-> **macOS users:** After downloading, clear the Gatekeeper quarantine flag before running:
+> **macOS users:** After downloading, make the binaries executable and clear the Gatekeeper quarantine flag:
 > ```bash
+> chmod 0555 ./tfvar-backup ./tfvar-create-buckets
 > xattr -d com.apple.quarantine ./tfvar-backup ./tfvar-create-buckets
 > ```
 
@@ -44,14 +45,30 @@ Both implementations share identical behaviour, flags, and S3 path structure.
 
 Pre-built binaries for all platforms are attached to every [GitHub Release](https://github.com/mpechner/tfvar_backup/releases).
 
+**macOS (M-series / arm64):**
 ```bash
-# Example: macOS arm64 (M-series)
 curl -L https://github.com/mpechner/tfvar_backup/releases/latest/download/tfvar-backup-darwin-arm64 \
   -o tfvar-backup
 curl -L https://github.com/mpechner/tfvar_backup/releases/latest/download/tfvar-create-buckets-darwin-arm64 \
   -o tfvar-create-buckets
-chmod +x tfvar-backup tfvar-create-buckets
+chmod 0555 tfvar-backup tfvar-create-buckets
+xattr -d com.apple.quarantine ./tfvar-backup ./tfvar-create-buckets
 ```
+
+**macOS (Intel / amd64):** same as above but use `darwin-amd64` in the URLs.
+
+**Linux (amd64):**
+```bash
+curl -L https://github.com/mpechner/tfvar_backup/releases/latest/download/tfvar-backup-linux-amd64 \
+  -o tfvar-backup
+curl -L https://github.com/mpechner/tfvar_backup/releases/latest/download/tfvar-create-buckets-linux-amd64 \
+  -o tfvar-create-buckets
+chmod 0555 tfvar-backup tfvar-create-buckets
+```
+
+**Linux (arm64 / Graviton / Raspberry Pi):** same as above but use `linux-arm64` in the URLs.
+
+**Windows (amd64):** download `tfvar-backup-windows-amd64.exe` and `tfvar-create-buckets-windows-amd64.exe` from the release page — no extra steps needed, just run them.
 
 Each release also includes a `SHA256SUMS.txt` so you can verify the download:
 
@@ -59,16 +76,6 @@ Each release also includes a `SHA256SUMS.txt` so you can verify the download:
 curl -L https://github.com/mpechner/tfvar_backup/releases/latest/download/SHA256SUMS.txt -o SHA256SUMS.txt
 sha256sum --check --ignore-missing SHA256SUMS.txt
 ```
-
-**macOS note:** macOS Gatekeeper will block binaries downloaded from the internet the first time you run them. You have two options:
-
-- Right-click the binary → Open → click Open in the dialog (one-time, per binary version)
-- Or from the terminal:
-  ```bash
-  xattr -d com.apple.quarantine ./tfvar-backup ./tfvar-create-buckets
-  ```
-
-This is a one-time step per version. If you prefer to avoid it entirely, build from source (Option B).
 
 ### Option B — Build from source
 
