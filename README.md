@@ -280,10 +280,10 @@ Every S3 action used by the test is listed here — nothing more. Resources are 
         "s3:DeleteBucket",
         "s3:HeadBucket",
         "s3:PutBucketVersioning",
-        "s3:PutBucketEncryption",
+        "s3:PutEncryptionConfiguration",
         "s3:PutBucketLogging",
-        "s3:PutBucketLifecycleConfiguration",
-        "s3:PutPublicAccessBlock"
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketPublicAccessBlock"
       ],
       "Resource": "arn:aws:s3:::tfvar-inttest-*"
     },
@@ -315,10 +315,10 @@ Every S3 action used by the test is listed here — nothing more. Resources are 
 | `s3:DeleteBucket` | Cleanup — removes both buckets after tests |
 | `s3:HeadBucket` | Idempotency check before create; existence check after delete |
 | `s3:PutBucketVersioning` | `tfvar-create-buckets` — enables versioning on backup bucket |
-| `s3:PutBucketEncryption` | `tfvar-create-buckets` — SSE-KMS on both buckets |
+| `s3:PutEncryptionConfiguration` | `tfvar-create-buckets` — SSE-KMS on both buckets |
 | `s3:PutBucketLogging` | `tfvar-create-buckets` — access logs → logging bucket |
-| `s3:PutBucketLifecycleConfiguration` | `tfvar-create-buckets` — 90-day noncurrent version expiry |
-| `s3:PutPublicAccessBlock` | `tfvar-create-buckets` — blocks public access on both buckets |
+| `s3:PutLifecycleConfiguration` | `tfvar-create-buckets` — 90-day noncurrent version expiry |
+| `s3:PutBucketPublicAccessBlock` | `tfvar-create-buckets` — blocks public access on both buckets |
 | `s3:PutObject` | `tfvar-backup push` — uploads tfvars files |
 | `s3:GetObject` | `tfvar-backup pull` / `pull-file` — downloads tfvars files |
 | `s3:DeleteObject` / `s3:DeleteObjectVersion` | Cleanup — purges versioned objects before bucket delete |
