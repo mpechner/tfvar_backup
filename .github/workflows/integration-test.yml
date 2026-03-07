@@ -18,9 +18,8 @@ jobs:
     name: S3 push / pull round-trip
     runs-on: ubuntu-latest
 
-    # Skip if AWS secrets are not configured (e.g. external forks / dependabot PRs).
-    # The 'build' job in ci.yml still runs so compile errors are always caught.
-    if: ${{ vars.INTEGRATION_TESTS_ENABLED == 'true' }}
+    # Skip on PRs from forks — they won't have AWS credentials.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
     outputs:
       passed: ${{ steps.result.outputs.passed }}
