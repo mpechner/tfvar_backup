@@ -170,6 +170,24 @@ tfvar-backup push my-bucket ../tf_take2 --dry-run # preview without uploading
 ./backup-tfvars.sh --dry-run my-bucket ../tf_take2
 ```
 
+### Diff (read-only — no changes applied)
+
+Use `diff` to review what would change before deciding to pull.
+
+```bash
+cd ~/dev/tf_take2
+
+# Go binary
+tfvar-backup diff my-bucket                                          # all files
+tfvar-backup diff my-bucket ../tf_take2                              # different repo dir
+tfvar-backup diff my-bucket --file deployments/dev/terraform.tfvars # single file
+
+# Bash
+./backup-tfvars.sh my-bucket --diff                                               # all files
+./backup-tfvars.sh my-bucket --diff ../tf_take2                                   # different repo dir
+./backup-tfvars.sh my-bucket --diff-file deployments/dev/terraform.tfvars        # single file
+```
+
 ### Pull (must be run from inside the repo)
 
 Pull requires you to be inside the target repo rather than passing a path to it. This is intentional — it prevents accidentally overwriting files in the wrong directory.
@@ -179,14 +197,15 @@ cd ~/dev/tf_take2
 
 # Go binary
 tfvar-backup pull my-bucket                         # restore everything
-tfvar-backup pull my-bucket --diff                  # show diff before applying
+tfvar-backup pull my-bucket --diff                  # show diff before applying each file
 tfvar-backup pull-file my-bucket deployments/dev-cluster/terraform.tfvars
 tfvar-backup pull-file my-bucket deployments/dev-cluster/terraform.tfvars --diff
 
 # Bash
 ./backup-tfvars.sh my-bucket --pull
-./backup-tfvars.sh my-bucket --pull --diff
+./backup-tfvars.sh my-bucket --pull --show-diff     # show diff before applying each file
 ./backup-tfvars.sh my-bucket --pull-file deployments/dev-cluster/terraform.tfvars
+./backup-tfvars.sh my-bucket --pull-file deployments/dev-cluster/terraform.tfvars --show-diff
 ```
 
 ### List
@@ -334,7 +353,7 @@ Every S3 action used by the test is listed here — nothing more. Resources are 
 | `s3:PutLifecycleConfiguration` | `tfvar-create-buckets` — 90-day noncurrent version expiry |
 | `s3:PutBucketPublicAccessBlock` | `tfvar-create-buckets` — blocks public access on both buckets |
 | `s3:PutObject` | `tfvar-backup push` — uploads tfvars files |
-| `s3:GetObject` | `tfvar-backup pull` / `pull-file` — downloads tfvars files |
+| `s3:GetObject` | `tfvar-backup pull` / `pull-file` / `diff` — downloads tfvars files |
 | `s3:DeleteObject` / `s3:DeleteObjectVersion` | Cleanup — purges versioned objects before bucket delete |
 | `s3:ListBucket` | `tfvar-backup list` — lists objects; also used by cleanup |
 | `s3:ListBucketVersions` | Cleanup — lists all versions before bucket removal |
@@ -371,4 +390,4 @@ tfvar_backup/
 
 - AWS CLI configured with S3 and STS access
 - `git`
-- `diff` (for `--diff` mode)
+- `diff` (for `diff` command and `--diff` / `--show-diff` modes)

@@ -27,7 +27,7 @@ func main() {
 	)
 
 	root := &cobra.Command{
-		Use:     "tfvar-backup <bucket> [repo-dir]",
+		Use:     "tfvar-backup <subcommand> <bucket> [repo-dir]",
 		Short:   "Backup and restore terraform.tfvars files to/from S3",
 		Version: version.String(),
 		Long: `Backup all terraform.tfvars files to S3, or restore them.
@@ -36,10 +36,21 @@ The git remote name is used as the S3 key prefix so backups from multiple
 repos can safely share one bucket.
 
 S3 path format:
-  s3://<bucket>/<git-repo-name>/<relative-path>/terraform.tfvars`,
-		Example: `  tfvar-backup my-bucket
-  tfvar-backup my-bucket ../tf_take2
-  tfvar-backup my-bucket --region us-west-2 ../tf_take2`,
+  s3://<bucket>/<git-repo-name>/<relative-path>/terraform.tfvars
+
+Subcommands:
+  push       Upload all terraform.tfvars files to S3
+  pull       Restore all terraform.tfvars files from S3
+  pull-file  Restore a single file from S3
+  diff       Show differences between local files and S3 (read-only)
+  list       List terraform.tfvars files stored in S3`,
+		Example: `  tfvar-backup push my-bucket
+  tfvar-backup push my-bucket ../tf_take2 --dry-run
+  tfvar-backup diff my-bucket
+  tfvar-backup diff my-bucket --file deployments/dev/terraform.tfvars
+  tfvar-backup pull my-bucket --diff
+  tfvar-backup pull-file my-bucket deployments/dev/terraform.tfvars --diff
+  tfvar-backup list my-bucket`,
 		// Shared persistent flags — available to all subcommands.
 	}
 
@@ -76,7 +87,7 @@ S3 path format:
 		Use:   "pull <bucket>",
 		Short: "Restore all terraform.tfvars files from S3 (run from repo root)",
 		Example: `  cd ~/dev/tf_take2 && tfvar-backup pull my-bucket
-  tfvar-backup pull my-bucket --diff`,
+  tfvar-backup pull my-bucket --diff   # show each diff before applying`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bucket := args[0]
@@ -100,7 +111,7 @@ S3 path format:
 		Use:   "pull-file <bucket> <repo-relative-path>",
 		Short: "Restore a single terraform.tfvars file from S3 (run from repo root)",
 		Example: `  cd ~/dev/tf_take2 && tfvar-backup pull-file my-bucket deployments/dev/terraform.tfvars
-  tfvar-backup pull-file my-bucket deployments/dev/terraform.tfvars --diff`,
+  tfvar-backup pull-file my-bucket deployments/dev/terraform.tfvars --diff  # show diff before applying`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bucket := args[0]
@@ -141,7 +152,58 @@ S3 path format:
 		},
 	}
 
-	root.AddCommand(pushCmd, pullCmd, pullFileCmd, listCmd)
+	// ── diff ─────────────────────────────────────────────────────────────────
+	var diffFile string
+	diffCmd := &cobra.Command{
+		Use:   "diff <bucket> [repo-dir]",
+		Short: "Show diff between local terraform.tfvars files and S3 (no changes applied)",
+		Example: `  tfvar-backup diff my-bucket
+  tfvar-backup diff my-bucket ../tf_take2
+  tfvar-backup diff my-bucket --file deployments/dev/terraform.tfvars`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			bucket, repoDir := parseArgs(args)
+			repoRoot, err := filepath.Abs(repoDir)
+			if err != nil {
+				return err
+			}
+			repoName := gitutil.RepoName(repoRoot)
+			ctx := context.Background()
+			cfg, err := awsutil.Config(ctx, region, accountID)
+			if err != nil {
+				return err
+			}
+			client := s3.NewFromConfig(cfg)
+			if err := checkBucketExists(ctx, client, bucket); err != nil {
+				return err
+			}
+			filePath := strings.TrimPrefix(strings.TrimPrefix(diffFile, "./"), "/")
+			if filePath != "" {
+				key := repoName + "/" + filePath
+				localPath := filepath.Join(repoRoot, filepath.FromSlash(filePath))
+				return printDiff(ctx, client, bucket, key, localPath)
+			}
+			keys, err := listKeys(ctx, client, bucket, repoName+"/")
+			if err != nil {
+				return err
+			}
+			if len(keys) == 0 {
+				fmt.Printf("No terraform.tfvars files found in s3://%s/%s/\n", bucket, repoName)
+				return nil
+			}
+			for _, key := range keys {
+				rel := strings.TrimPrefix(key, repoName+"/")
+				localPath := filepath.Join(repoRoot, filepath.FromSlash(rel))
+				if err := printDiff(ctx, client, bucket, key, localPath); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	diffCmd.Flags().StringVar(&diffFile, "file", "", "Diff a single file (repo-relative path)")
+
+	root.AddCommand(pushCmd, pullCmd, pullFileCmd, listCmd, diffCmd)
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)

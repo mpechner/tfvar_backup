@@ -20,9 +20,11 @@ Options:
   --pull                Restore all tfvars from S3 (must be run from the repo root)
   --pull-file <path>    Restore a single tfvars file from S3 (repo-relative path,
                         e.g. deployments/dev-cluster/terraform.tfvars)
+  --diff                Show diff between local files and S3 — no changes applied
+  --diff-file <path>    Diff a single file against S3 — no changes applied
   --list                List tfvars stored in S3
   --dry-run             Show what would be pushed without uploading
-  --diff                On --pull / --pull-file, show a diff of each file before applying
+  --show-diff           On --pull / --pull-file, show a diff of each file before applying
   --region <r>          AWS region (default: us-east-1)
   --account <id>        Assume terraform-execute role in this account ID
   -h, --help            Show this help
@@ -37,8 +39,11 @@ Examples:
   $(basename "$0") my-bucket --region us-west-2 --dry-run ../tf_foobar
   $(basename "$0") --account 123456789012 my-bucket --pull
   $(basename "$0") my-bucket --pull-file deployments/dev/terraform.tfvars
-  $(basename "$0") my-bucket --pull --diff
-  $(basename "$0") my-bucket --pull-file deployments/dev/terraform.tfvars --diff
+  $(basename "$0") my-bucket --diff
+  $(basename "$0") my-bucket --diff ../tf_take2
+  $(basename "$0") my-bucket --diff-file deployments/dev/terraform.tfvars
+  $(basename "$0") my-bucket --pull --show-diff
+  $(basename "$0") my-bucket --pull-file deployments/dev/terraform.tfvars --show-diff
 EOF
   exit 0
 }
@@ -52,21 +57,25 @@ REGION="us-east-1"
 ACCOUNT_ID=""
 REPO_DIR_ARG="."
 PULL_FILE=""
+DIFF_FILE=""
 DIFF=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --push|--pull|--list|--dry-run) MODE="$1" ;;
+    --push|--pull|--list|--dry-run|--diff) MODE="$1" ;;
     --pull-file)
       [ $# -gt 1 ] || { echo "ERROR: --pull-file requires a value"; exit 1; }
       PULL_FILE="$2"; MODE="--pull-file"; shift ;;
+    --diff-file)
+      [ $# -gt 1 ] || { echo "ERROR: --diff-file requires a value"; exit 1; }
+      DIFF_FILE="$2"; MODE="--diff-file"; shift ;;
     --region)
       [ $# -gt 1 ] || { echo "ERROR: --region requires a value"; exit 1; }
       REGION="$2"; shift ;;
     --account)
       [ $# -gt 1 ] || { echo "ERROR: --account requires a value"; exit 1; }
       ACCOUNT_ID="$2"; shift ;;
-    --diff) DIFF=1 ;;
+    --show-diff) DIFF=1 ;;
     -*) echo "ERROR: Unknown flag: $1"; exit 1 ;;
     *)
       if [ -z "$TFVARS_BUCKET" ]; then
@@ -83,7 +92,7 @@ if [ -z "$TFVARS_BUCKET" ]; then
 fi
 
 # ── Resolve repo root ────────────────────────────────────────────────────────
-# For push/list/dry-run: resolve the supplied path (default .).
+# For push/list/dry-run/diff: resolve the supplied path (default .).
 # For pull: must be run from the repo root — reject any path that isn't cwd.
 if [ "$MODE" = "--pull" ] || [ "$MODE" = "--pull-file" ]; then
   REPO_ROOT="$(pwd)"
@@ -157,6 +166,25 @@ apply_one() {
   aws s3 cp "s3://${TFVARS_BUCKET}/${key}" "$local_path" --region "$REGION"
 }
 
+# Show diff for one S3 key against the local copy — no changes applied.
+diff_one() {
+  local key="$1"
+  local rel="${key#${REPO_NAME}/}"
+  local local_path="${REPO_ROOT}/${rel}"
+  local tmp
+  tmp="$(mktemp)"
+  aws s3 cp "s3://${TFVARS_BUCKET}/${key}" "$tmp" --region "$REGION" >/dev/null
+  echo "  ── diff: ${local_path} ──────────────────────────────"
+  if [ -f "$local_path" ]; then
+    diff -u "$local_path" "$tmp" || true
+  else
+    echo "  (new file — no local copy exists)"
+    cat "$tmp"
+  fi
+  echo ""
+  rm -f "$tmp"
+}
+
 # ── Validate bucket exists ────────────────────────────────────────────────────
 if ! aws s3api head-bucket --bucket "$TFVARS_BUCKET" --region "$REGION" 2>/dev/null; then
   echo "ERROR: Bucket s3://${TFVARS_BUCKET} not found or not accessible."
@@ -171,6 +199,32 @@ fi
 if [ "$MODE" = "--list" ]; then
   echo "Listing tfvars in s3://${TFVARS_BUCKET}/${REPO_NAME}/"
   aws s3 ls "s3://${TFVARS_BUCKET}/${REPO_NAME}/" --recursive --region "$REGION"
+  exit 0
+fi
+
+# ── Diff mode (all files, read-only) ──────────────────────────────────────────
+if [ "$MODE" = "--diff" ]; then
+  OBJECTS=$(aws s3 ls "s3://${TFVARS_BUCKET}/${REPO_NAME}/" \
+    --recursive --region "$REGION" \
+    | awk '{print $4}' | grep 'terraform\.tfvars$')
+
+  if [ -z "$OBJECTS" ]; then
+    echo "No terraform.tfvars files found in s3://${TFVARS_BUCKET}/${REPO_NAME}/"
+    exit 0
+  fi
+
+  while IFS= read -r key; do
+    diff_one "$key"
+  done <<< "$OBJECTS"
+  exit 0
+fi
+
+# ── Diff-file mode (single file, read-only) ───────────────────────────────────
+if [ "$MODE" = "--diff-file" ]; then
+  DIFF_FILE="${DIFF_FILE#./}"
+  DIFF_FILE="${DIFF_FILE#/}"
+  KEY="${REPO_NAME}/${DIFF_FILE}"
+  diff_one "$KEY"
   exit 0
 fi
 
