@@ -70,12 +70,7 @@ chmod 0555 tfvar-backup tfvar-create-buckets
 
 **Windows (amd64):** download `tfvar-backup-windows-amd64.exe` and `tfvar-create-buckets-windows-amd64.exe` from the release page — no extra steps needed, just run them.
 
-Each release also includes a `SHA256SUMS.txt` so you can verify the download:
-
-```bash
-curl -L https://github.com/mpechner/tfvar_backup/releases/latest/download/SHA256SUMS.txt -o SHA256SUMS.txt
-sha256sum --check --ignore-missing SHA256SUMS.txt
-```
+Each release also includes a `SHA256SUMS.txt` — see [Verifying downloads](#security) below.
 
 ### Option B — Build from source
 
@@ -244,6 +239,35 @@ GitHub Actions will automatically:
 3. Generate a `SHA256SUMS.txt` checksum file
 4. Publish a GitHub Release with all binaries and checksums attached
 5. Auto-generate release notes from commit history
+
+---
+
+## Security
+
+### Vulnerability scanning
+
+The published binaries are Go binaries that embed the Go standard library. A vulnerability in `crypto/tls`, `net/http`, or similar packages affects the binary even if the source code hasn't changed.
+
+To protect users who download pre-built releases, a weekly scan runs automatically every Monday using [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) — the official Go vulnerability scanner maintained by the Go team. It checks against the [Go vulnerability database](https://vuln.go.dev) and only flags vulnerabilities that are reachable through the actual call graph (not just transitive imports you never call).
+
+**What happens on a finding:**
+- **All published releases are immediately retracted** — every GitHub Release and its assets are deleted so no one can download a vulnerable binary
+- The workflow then fails, listing every CVE/GHSA ID, the affected symbol, and the version that fixes it
+- The fix requires a deliberate Go version or dependency bump followed by a new tag push to re-publish clean binaries
+- You can also trigger the scan manually from the Actions tab at any time
+
+**What happens when the scan is clean:**
+- If the latest release tag is more than 6 days old, the workflow automatically bumps the patch version and pushes a new tag, triggering a full release rebuild with fresh binaries
+- This ensures published binaries are never more than ~7 days stale even when no code has changed
+
+### Verifying downloads
+
+Every release includes a `SHA256SUMS.txt`. Verify your download before use:
+
+```bash
+curl -L https://github.com/mpechner/tfvar_backup/releases/latest/download/SHA256SUMS.txt -o SHA256SUMS.txt
+sha256sum --check --ignore-missing SHA256SUMS.txt
+```
 
 ---
 

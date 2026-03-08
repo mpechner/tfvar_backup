@@ -6,7 +6,7 @@ on:
   workflow_dispatch:        # allow manual trigger from the Actions tab
 
 permissions:
-  contents: write   # needed to create a tag + release if scan passes
+  contents: write   # needed to delete releases/tags and create new ones
   id-token: write   # needed for OIDC in the downstream release job
 
 jobs:
@@ -16,6 +16,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full tag history
 
       - uses: actions/setup-go@v5
         with:
@@ -30,9 +32,52 @@ jobs:
         # govulncheck exits non-zero when it finds vulnerabilities that affect
         # the call graph (i.e. code you actually call, not just imports).
         # The output lists the CVE/GHSA ID, affected symbol, and fix version.
+        # continue-on-error lets us run the retraction step before failing.
+        continue-on-error: true
         run: |
           echo "Running govulncheck against all packages..."
           govulncheck ./...
+          echo "vuln_found=false" >> "$GITHUB_OUTPUT"
+
+      - name: Set vuln flag
+        if: steps.scan.outcome == 'failure'
+        run: echo "vuln_found=true" >> "$GITHUB_OUTPUT"
+        id: flag
+
+      - name: Retract all releases — vulnerable binaries must not remain available
+        if: steps.scan.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::warning::Vulnerabilities found — retracting all published releases."
+
+          # List every release (id + tag). gh returns JSON array.
+          RELEASES=$(gh release list --json tagName,databaseId --limit 100)
+          COUNT=$(echo "$RELEASES" | jq length)
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No published releases to retract."
+          else
+            echo "Retracting ${COUNT} release(s)..."
+            echo "$RELEASES" | jq -r '.[].tagName' | while read -r TAG; do
+              echo "  Deleting release and tag: ${TAG}"
+              # Delete the GitHub Release (assets + release record).
+              gh release delete "${TAG}" --yes --cleanup-tag || true
+            done
+            echo "All releases retracted."
+          fi
+
+          echo ""
+          echo "ACTION REQUIRED: Update the Go version or affected dependency,"
+          echo "then push a new version tag to publish clean binaries."
+
+      - name: Fail the workflow — vulnerabilities found
+        if: steps.scan.outcome == 'failure'
+        run: |
+          echo "::error::govulncheck found active vulnerabilities in the call graph."
+          echo "All published releases have been retracted."
+          echo "Fix the issue and push a new tag to re-publish."
+          exit 1
 
       - name: No vulnerabilities found — trigger release rebuild
         # Only reached when govulncheck exits 0 (clean).
