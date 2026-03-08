@@ -1,6 +1,6 @@
 module github.com/mpechner/tfvar_backup
 
-go 1.24.2
+go 1.25.8
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.3 // indirect
