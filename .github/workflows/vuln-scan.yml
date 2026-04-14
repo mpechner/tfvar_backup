@@ -51,8 +51,8 @@ jobs:
         run: |
           echo "::warning::Vulnerabilities found — retracting all published releases."
 
-          # List every release (id + tag). gh returns JSON array.
-          RELEASES=$(gh release list --json tagName,databaseId --limit 100)
+          # List every release tag. gh returns JSON array.
+          RELEASES=$(gh release list --json tagName --limit 100)
           COUNT=$(echo "$RELEASES" | jq length)
 
           if [ "$COUNT" -eq 0 ]; then
