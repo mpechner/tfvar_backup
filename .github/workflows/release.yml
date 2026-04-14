@@ -37,9 +37,9 @@ jobs:
       date:    ${{ steps.vars.outputs.date }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -54,9 +54,11 @@ jobs:
           else
             VERSION="${GITHUB_REF_NAME}"
           fi
-          echo "version=${VERSION}"                   >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "date=$(date -u +%Y-%m-%d)"            >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${VERSION}"
+            echo "commit=$(git rev-parse --short HEAD)"
+            echo "date=$(date -u +%Y-%m-%d)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build linux/amd64
         env:
@@ -79,10 +81,10 @@ jobs:
           ./dist/tfvar-create-buckets-linux-amd64 --version
 
       - name: Generate canary checksum
-        run: cd dist && sha256sum * > checksums-linux-amd64.txt
+        run: cd dist && sha256sum -- * > checksums-linux-amd64.txt
 
       - name: Upload canary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: binaries-linux-amd64
           path: dist/
@@ -108,9 +110,9 @@ jobs:
             goarch: amd64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -136,10 +138,10 @@ jobs:
           go build -ldflags "$LDFLAGS" -o "dist/tfvar-create-buckets-${SUFFIX}${EXT}" ./cmd/create-buckets
 
       - name: Generate checksum
-        run: cd dist && sha256sum * > checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt
+        run: cd dist && sha256sum -- * > checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/
@@ -151,7 +153,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Create and push git tag (if it does not already exist)
         run: |
@@ -167,7 +169,7 @@ jobs:
           fi
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: dist/
           merge-multiple: true
